@@ -42,6 +42,10 @@
 #define MALLOC_TARGET_DK_WATCH 0
 #endif // MALLOC_TARGET_DK_WATCH
 
+#ifndef MALLOC_TARGET_DK_TV
+#define MALLOC_TARGET_DK_TV 0
+#endif // MALLOC_TARGET_DK_TV
+
 #ifndef MALLOC_TARGET_EXCLAVES_INTROSPECTOR
 #define MALLOC_TARGET_EXCLAVES_INTROSPECTOR 0
 #endif // MALLOC_TARGET_EXCLAVES_INTROSPECTOR
@@ -113,12 +117,15 @@
 // enable nano checking for corrupt free list
 #define NANO_FREE_DEQUEUE_DILIGENCE 1
 
-// Conditional behaviour depends on MallocSpaceEfficient being set by
-// JetsamProperties which isn't true on iOS
-#if MALLOC_TARGET_IOS || TARGET_OS_DRIVERKIT
-#define NANOV2_DEFAULT_MODE NANO_ENABLED
-#else
+// On macOS, nano should be enabled by default if MallocSpaceEfficient isn't set
+// (which is what the "conditional" behavior means)
+//
+// On all other platforms, nano should be enabled only if specifically requested
+// via either the apple or environment arrays
+#if TARGET_OS_OSX
 #define NANOV2_DEFAULT_MODE NANO_CONDITIONAL
+#else
+#define NANOV2_DEFAULT_MODE NANO_ENABLED
 #endif
 
 // whether to pre-reserve all available nano regions during initialization
@@ -150,36 +157,25 @@
 
 
 // The large last-free cache (aka. death row cache)
-#if (TARGET_OS_IOS || TARGET_OS_VISION) || TARGET_OS_OSX || \
-		TARGET_OS_SIMULATOR || TARGET_OS_DRIVERKIT
-#define CONFIG_LARGE_CACHE 1
 #if TARGET_OS_OSX
+#define CONFIG_LARGE_CACHE 1
 # define DEFAULT_LARGE_CACHE_ENABLED true
-#else
+#else // !TARGET_OS_OSX
+#define CONFIG_LARGE_CACHE 0
 # define DEFAULT_LARGE_CACHE_ENABLED false
 #endif // TARGET_OS_OSX
-#else
-#define CONFIG_LARGE_CACHE 0
-#define DEFAULT_LARGE_CACHE_ENABLED false
-#endif
 
 // Deferred reclaim
-#if CONFIG_LARGE_CACHE
 #if (MALLOC_TARGET_IOS_ONLY && !TARGET_OS_SIMULATOR) || \
-		(MALLOC_TARGET_64BIT && TARGET_OS_DRIVERKIT && !MALLOC_TARGET_DK_OSX)
-#define CONFIG_MAGAZINE_DEFERRED_RECLAIM 1
-#define CONFIG_XZM_DEFERRED_RECLAIM 1
-#elif TARGET_OS_OSX || (TARGET_OS_VISION && !TARGET_OS_SIMULATOR)
+		(TARGET_OS_VISION && !TARGET_OS_SIMULATOR) || \
+		(MALLOC_TARGET_64BIT && TARGET_OS_DRIVERKIT && !MALLOC_TARGET_DK_OSX) || \
+		TARGET_OS_OSX
 #define CONFIG_MAGAZINE_DEFERRED_RECLAIM 0
 #define CONFIG_XZM_DEFERRED_RECLAIM 1
 #else
 #define CONFIG_MAGAZINE_DEFERRED_RECLAIM 0
 #define CONFIG_XZM_DEFERRED_RECLAIM 0
 #endif // MALLOC_TARGET_IOS && MALLOC_TARGET_64BIT
-#else
-#define CONFIG_MAGAZINE_DEFERRED_RECLAIM 0
-#define CONFIG_XZM_DEFERRED_RECLAIM 0
-#endif // CONFIG_LARGE_CACHE
 
 #if CONFIG_MAGAZINE_DEFERRED_RECLAIM && !CONFIG_LARGE_CACHE
 #error "Deferred reclaim requires large cache"
@@ -216,13 +212,11 @@
 #endif
 
 // Support cluster-aware policies in xzone malloc
-#if ((TARGET_OS_IOS || TARGET_OS_VISION) && !TARGET_OS_SIMULATOR) || \
-		MALLOC_TARGET_DK_IOS || MALLOC_TARGET_DK_VISIONOS || \
-		TARGET_OS_OSX || MALLOC_TARGET_DK_OSX || \
-		(TARGET_OS_WATCH && !TARGET_OS_SIMULATOR) || MALLOC_TARGET_DK_WATCH
-#define CONFIG_XZM_CLUSTER_AWARE 1
-#else
+#if TARGET_OS_SIMULATOR || TARGET_OS_BRIDGE || \
+		MALLOC_TARGET_EXCLAVES || MALLOC_TARGET_EXCLAVES_INTROSPECTOR
 #define CONFIG_XZM_CLUSTER_AWARE 0
+#else
+#define CONFIG_XZM_CLUSTER_AWARE 1
 #endif
 
 // Build with supporting logic for cluster awareness in either allocator
@@ -244,9 +238,30 @@
 
 #define MALLOC_ZERO_POLICY_DEFAULT MALLOC_ZERO_ON_FREE
 
+#if MALLOC_TARGET_64BIT
+#define CONFIG_XZONE_MALLOC 1
+#else
+#define CONFIG_XZONE_MALLOC 0
+#endif
 
-#ifndef MALLOC_XZONE_ENABLED_DEFAULT
-#define MALLOC_XZONE_ENABLED_DEFAULT false
+#if CONFIG_XZONE_MALLOC && MALLOC_TARGET_IOS
+#define CONFIG_VM_USER_RANGES 1
+#else
+#define CONFIG_VM_USER_RANGES 0
+#endif
+
+#if CONFIG_XZONE_MALLOC && TARGET_CPU_ARM64 && (TARGET_OS_OSX || MALLOC_TARGET_DK_OSX)
+#define CONFIG_MACOS_RANGES 1
+#else
+#define CONFIG_MACOS_RANGES 0
+#endif
+
+#define MALLOC_XZONE_NANO_ENABLED_DEFAULT false
+
+#if CONFIG_XZONE_MALLOC && (MALLOC_TARGET_IOS || TARGET_OS_OSX || MALLOC_TARGET_DK_OSX)
+#define CONFIG_MADV_ZERO 1
+#else
+#define CONFIG_MADV_ZERO 0
 #endif
 
 #if MALLOC_TARGET_64BIT
@@ -255,7 +270,7 @@
 #define CONFIG_EARLY_MALLOC 0
 #endif
 
-#if MALLOC_TARGET_IOS_ONLY || TARGET_OS_VISION || TARGET_OS_OSX || TARGET_OS_WATCH
+#if !TARGET_OS_BRIDGE && !MALLOC_TARGET_EXCLAVES && !MALLOC_TARGET_EXCLAVES_INTROSPECTOR
 #define CONFIG_MALLOC_PROCESS_IDENTITY 1
 #else
 #define CONFIG_MALLOC_PROCESS_IDENTITY 0
@@ -267,5 +282,11 @@
 
 #define MALLOC_SECURE_ALLOCATOR_LAUNCHD_ENABLED_DEFAULT true
 
+// We need to define CONFIG_MTE here in case it's not defined, as it means
+// we're compiling a target for which we're not setting it through
+// GCC_PREPROCESSOR_DEFINITIONS in the Xcode config.
+#ifndef CONFIG_MTE
+#define CONFIG_MTE 0
+#endif
 
 #endif // __PLATFORM_H

@@ -85,22 +85,16 @@ run_enumerator()
 
 static void *allocations[ALLOCATION_COUNT];
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true), T_META_TAG_VM_NOT_PREFERRED);
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 T_DECL(nano_active_test, "Test that Nano is activated",
 		T_META_ENVVAR("MallocNanoZone=1"), T_META_ENVVAR("MallocProbGuard=0"),
-		T_META_TAG_XZONE, T_META_TAG_NANO_ON_XZONE)
+		T_META_TAG_ALL_ALLOCATORS, T_META_TAG_VM_PREFERRED)
 {
 #if CONFIG_NANOZONE
-	bool nano_on_xzone = getenv("MallocNanoOnXzone");
-	if (nano_on_xzone) {
-		T_ASSERT_NE(malloc_engaged_secure_allocator(), 0,
-				"Secure allocator engaged");
-	}
-
 	T_ASSERT_NE(malloc_engaged_nano(), 0, "Nano mode engaged");
 
-	if (nano_on_xzone || !malloc_engaged_secure_allocator()) {
+	if (!malloc_engaged_secure_allocator()) {
 		void *ptr = malloc(16);
 		T_LOG("Nano ptr is %p\n", ptr);
 		T_ASSERT_EQ(NANOZONE_SIGNATURE, (uint64_t)((uintptr_t)ptr) >> SHIFT_NANO_SIGNATURE,
@@ -114,7 +108,14 @@ T_DECL(nano_active_test, "Test that Nano is activated",
 
 T_DECL(nano_enumerator_test, "Test the Nanov2 enumerator",
 		T_META_ENVVAR("MallocNanoZone=V2"), T_META_ENVVAR("MallocProbGuard=0"),
-		T_META_TAG_XZONE)
+		// This test only happens to work with thread caching enabled and a bin
+		// step of 2 because it's highly improbable that any single size class
+		// gets enough allocations to trigger thread caching.  With a bin step
+		// of 1, the 192 and 256 bins are almost guaranteed to serve enough
+		// allocations to reach the threshold and activate, and then the stats
+		// differ by the amount in the cache.
+		T_META_ENVVAR("MallocXzoneBinStep=2"),
+		T_META_TAG_ALL_ALLOCATORS, T_META_TAG_VM_PREFERRED)
 {
 #if CONFIG_NANOZONE
 	if (malloc_engaged_secure_allocator()) {
@@ -220,7 +221,8 @@ T_DECL(nano_enumerator_test, "Test the Nanov2 enumerator",
 const char * const data = "abcdefghijklm";
 
 T_DECL(realloc_nano_size_class_change, "realloc with size class change",
-	   T_META_ENVVAR("MallocNanoZone=1"))
+	   T_META_ENVVAR("MallocNanoZone=1"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_MAGAZINE_ONLY)
 {
 #if CONFIG_NANOZONE
 	void *ptr = malloc(16);
@@ -244,7 +246,8 @@ T_DECL(realloc_nano_size_class_change, "realloc with size class change",
 }
 
 T_DECL(realloc_nano_ptr_change, "realloc with pointer change",
-	   T_META_ENVVAR("MallocNanoZone=1"))
+	   T_META_ENVVAR("MallocNanoZone=1"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_MAGAZINE_ONLY)
 {
 #if CONFIG_NANOZONE
 	void *ptr = malloc(32);
@@ -263,7 +266,8 @@ T_DECL(realloc_nano_ptr_change, "realloc with pointer change",
 }
 
 T_DECL(realloc_nano_to_other, "realloc with allocator change (nano)",
-	   T_META_ENVVAR("MallocNanoZone=1"), T_META_TAG_NANO_ON_XZONE)
+	   T_META_ENVVAR("MallocNanoZone=1"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_MAGAZINE_ONLY)
 {
 #if CONFIG_NANOZONE
 	void *ptr = malloc(32);					// From Nano
@@ -283,7 +287,8 @@ T_DECL(realloc_nano_to_other, "realloc with allocator change (nano)",
 }
 
 T_DECL(realloc_nano_to_zero_size, "realloc with target size zero",
-	   T_META_ENVVAR("MallocNanoZone=1"))
+	   T_META_ENVVAR("MallocNanoZone=1"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_MAGAZINE_ONLY)
 {
 #if CONFIG_NANOZONE
 	void *ptr = malloc(16);
@@ -301,7 +306,8 @@ T_DECL(realloc_nano_to_zero_size, "realloc with target size zero",
 }
 
 T_DECL(realloc_nano_shrink, "realloc to smaller size",
-	   T_META_ENVVAR("MallocNanoZone=1"))
+	   T_META_ENVVAR("MallocNanoZone=1"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_MAGAZINE_ONLY)
 {
 #if CONFIG_NANOZONE
 	void *ptr = malloc(64);
@@ -327,7 +333,8 @@ T_DECL(realloc_nano_shrink, "realloc to smaller size",
 }
 
 T_DECL(nano_memalign_trivial, "Test that nano serves trivial memalign allocations",
-	   T_META_ENVVAR("MallocNanoZone=1"))
+	   T_META_ENVVAR("MallocNanoZone=1"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_MAGAZINE_ONLY)
 {
 #if CONFIG_NANOZONE
 	size_t size = 16;
@@ -355,7 +362,8 @@ T_DECL(nano_memalign_trivial, "Test that nano serves trivial memalign allocation
 
 T_DECL(overspill_arena, "force overspill of an arena",
 	   T_META_ENVVAR("MallocNanoZone=V2"),
-	   T_META_ENVVAR("MallocGuardEdges=all"))
+	   T_META_ENVVAR("MallocGuardEdges=all"),
+	   T_META_TAG_VM_PREFERRED, T_META_TAG_MAGAZINE_ONLY)
 {
 #if CONFIG_NANOZONE
 	void **ptrs = calloc(ALLOCS_PER_ARENA, sizeof(void *));
@@ -400,7 +408,8 @@ T_DECL(overspill_arena, "force overspill of an arena",
 
 #if NANOV2_MULTIPLE_REGIONS
 T_DECL(overspill_region, "force overspill of a region",
-	   T_META_ENVVAR("MallocNanoZone=V2"))
+	   T_META_ENVVAR("MallocNanoZone=V2"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_MAGAZINE_ONLY)
 {
 	void **ptrs = calloc(ALLOCS_PER_REGION, sizeof(void *));
 	T_QUIET; T_ASSERT_NOTNULL(ptrs, "Unable to allocate pointers");
@@ -438,7 +447,7 @@ T_DECL(overspill_nanozone, "force overspill of nano zone",
 		T_META_ENVVAR("MallocNanoZone=V2"),
 		T_META_ENVVAR("MallocNanoMaxRegion=1"),
 		T_META_ENVVAR("MallocProbGuard=0"),
-		T_META_TAG_NANO_ON_XZONE)
+		T_META_TAG_VM_PREFERRED, T_META_TAG_MAGAZINE_ONLY)
 {
 	int index;
 	bool spilled_to_tiny = false;
@@ -547,7 +556,8 @@ do_allocations_thread(void *arg)
 T_DECL(region_holes, "ensure correct handling of holes between regions",
 		T_META_ENVVAR("MallocNanoZone=V2"),
 		// Region reservation does not allow for holes between regions
-		T_META_ENABLED(!CONFIG_NANO_RESERVE_REGIONS))
+		T_META_ENABLED(!CONFIG_NANO_RESERVE_REGIONS),
+		T_META_TAG_VM_NOT_PREFERRED, T_META_TAG_MAGAZINE_ONLY)
 {
 	srandom(time(NULL));
 

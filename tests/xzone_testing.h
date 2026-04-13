@@ -13,27 +13,7 @@
 
 #define TESTING_XZONE_MALLOC 1
 
-// On exclavekit, we only want one copy of the code enclosed here, which we'll
-// arbitrarily build into the metapool tests - they just have to be built into
-// one of them
-
-#if !TARGET_OS_EXCLAVEKIT || defined(TESTING_METAPOOL)
-
-#include "../src/vm.c"
-
-void
-malloc_report(uint32_t flags, const char *fmt, ...)
-{
-	T_LOG("malloc_report(): %s", fmt);
-}
-
-void
-malloc_zone_error(uint32_t flags, bool is_corruption, const char *fmt, ...)
-{
-	__builtin_trap();
-}
-
-#endif // !TARGET_OS_EXCLAVEKIT || defined(TESTING_METAPOOL)
+#include "mvm_testing.h"
 
 static void test_malloc_lock_lock(_malloc_lock_s *lock) {
 #if MALLOC_HAS_OS_LOCK
@@ -54,6 +34,10 @@ static void test_malloc_lock_unlock(_malloc_lock_s *lock) {
 #define _malloc_lock_unlock(lock) test_malloc_lock_unlock(lock);
 
 #if !MALLOC_TARGET_EXCLAVES && !defined(TESTING_METAPOOL)
+
+// On exclavekit, we only want one copy of the code enclosed here, which we'll
+// arbitrarily build into the metapool tests - they just have to be built into
+// one of them
 
 // When not specifically testing the metapool, stub out these functions so that
 // we can build code that uses them.
@@ -120,27 +104,10 @@ get_default_xzone_zone(void)
 	}
 #endif
 
-	if (zone->introspect->zone_type != MALLOC_ZONE_TYPE_XZONE) {
-		// Maybe it's nano?
-		i++;
-		if (i == malloc_num_zones) {
-			T_ASSERT_FAIL("didn't find xzone xzone");
-		}
-		malloc_zone_t *helper_zone = malloc_zones[i];
-		const char *helper_name = malloc_get_zone_name(helper_zone);
-		if (helper_name && strcmp(helper_name, "MallocHelperZone") != 0) {
-			T_ASSERT_FAIL("unexpected zone %s", helper_name);
-		}
+	T_ASSERT_GE(zone->version, 14, "zone version");
+	T_ASSERT_EQ(zone->introspect->zone_type, MALLOC_ZONE_TYPE_XZONE,
+			"zone is xzone malloc");
 
-		found_nano = true;
-
-		zone = helper_zone;
-		T_ASSERT_GE(zone->version, 14, "helper zone version");
-		T_ASSERT_EQ(zone->introspect->zone_type, MALLOC_ZONE_TYPE_XZONE,
-				"helper zone is xzone malloc");
-	}
-
-	bool nano_on_xzone = false;
 	enum {
 		PGM_NO_EXPECTATION,
 		PGM_EXPECTED_ENABLED,
@@ -148,17 +115,12 @@ get_default_xzone_zone(void)
 	} pgm_expectation = PGM_NO_EXPECTATION;
 
 #if !MALLOC_TARGET_EXCLAVES
-	nano_on_xzone = getenv("MallocNanoOnXzone");
-
 	const char *pgm_env = getenv("MallocProbGuard");
 	if (pgm_env) {
 		pgm_expectation = (*pgm_env == '1' ? PGM_EXPECTED_ENABLED :
 				PGM_EXPECTED_DISABLED);
 	}
 #endif
-
-	T_ASSERT_EQ(nano_on_xzone, found_nano,
-			"Nano state matched expectation (%d)", (int)nano_on_xzone);
 
 	switch (pgm_expectation) {
 	case PGM_NO_EXPECTATION:

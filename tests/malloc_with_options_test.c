@@ -17,6 +17,13 @@
 #include <ktrace.h>
 #endif // !MALLOC_TARGET_EXCLAVES
 
+// Returns true if memory is canonically tagged
+// equivalent to "are bits 59:56 cleared"
+static bool
+check_canonical_tag(void *ptr)
+{
+	return !((uintptr_t)ptr & 0x0f00000000000000);
+}
 
 static bool
 check_zeroed_memory(void *ptr, size_t size)
@@ -53,13 +60,16 @@ run_options_test(int iterations)
 		int opt_rand = rand();
 
 		bool aligned = opt_rand & 0x1;
-
 		bool zeroed = opt_rand & 0x2;
 		malloc_zone_malloc_options_t options = MALLOC_ZONE_MALLOC_OPTION_NONE;
 		if (zeroed) {
 			options |= MALLOC_ZONE_MALLOC_OPTION_CLEAR;
 		}
 
+		bool canonical = opt_rand & 0x4;
+		if (canonical) {
+			options |= MALLOC_NP_OPTION_CANONICAL_TAG;
+		}
 
 		opt_rand = rand();
 		size_t align = 0;
@@ -73,10 +83,12 @@ run_options_test(int iterations)
 			// For maximum size = 8M, make size up to align*8
 			size = align * (((opt_rand >> 4) & 0x7) + 1);
 		} else {
-			// size anywhere from 0 to 8M
-			size = (opt_rand & 0x7fffff) + 1;
-		}
+			// new api requires a non-zero alignment
+			align = MALLOC_ZONE_MALLOC_DEFAULT_ALIGN;
 
+			// size anywhere from 0 to 8M
+			size = (opt_rand & 0x7fffff) & ~(align - 1);
+		}
 
 		free(pointers[index]);
 		if (opt_rand % 2) {
@@ -89,13 +101,19 @@ run_options_test(int iterations)
 				size, options);
 #pragma GCC diagnostic pop
 		}
-		T_QUIET; T_ASSERT_NOTNULL(pointers[index], "Allocation failed\n");
+		T_QUIET; T_ASSERT_NOTNULL(pointers[index],
+				"Allocation failed, iteration %d, align %lu, size %lu\n",
+				iteration, align, size);
 
 		if (zeroed) {
 			T_QUIET; T_ASSERT_TRUE(check_zeroed_memory(pointers[index], size),
 					"Memory wasn't cleared");
 		}
-		if (align) {
+		if (canonical) {
+			T_QUIET; T_ASSERT_TRUE(check_canonical_tag(pointers[index]),
+					"Tag isn't canonical");
+		}
+		if (aligned) {
 			T_QUIET; T_ASSERT_TRUE(check_ptr_is_aligned(pointers[index], align),
 				"Pointer isn't aligned");
 		}
@@ -111,7 +129,7 @@ run_options_test(int iterations)
 }
 
 T_DECL(malloc_options, "malloc with options",
-	T_META_TAG_XZONE, T_META_TAG_VM_NOT_PREFERRED)
+	T_META_TAG_ALL_ALLOCATORS, T_META_TAG_VM_NOT_PREFERRED)
 {
 	unsigned seed = time(NULL);
 	T_LOG("seed value = %u", seed);
@@ -122,7 +140,7 @@ T_DECL(malloc_options, "malloc with options",
 
 T_DECL(malloc_pgm_options, "malloc with options, but PGM is enabled",
 	T_META_ENVVAR("ProbGuardMalloc=1"),
-	T_META_TAG_XZONE, T_META_TAG_VM_NOT_PREFERRED)
+	T_META_TAG_ALL_ALLOCATORS, T_META_TAG_VM_NOT_PREFERRED)
 {
 	unsigned seed = time(NULL);
 	T_LOG("seed value = %u", seed);
@@ -133,7 +151,7 @@ T_DECL(malloc_pgm_options, "malloc with options, but PGM is enabled",
 
 T_DECL(malloc_msl_lite_options, "malloc with options, but MSL Lite is enabled",
 	T_META_ENVVAR("MallocStackLogging=lite"),
-	T_META_TAG_XZONE, T_META_TAG_VM_NOT_PREFERRED)
+	T_META_TAG_ALL_ALLOCATORS, T_META_TAG_VM_NOT_PREFERRED)
 {
 	unsigned seed = time(NULL);
 	T_LOG("seed value = %u", seed);
@@ -145,7 +163,9 @@ T_DECL(malloc_msl_lite_options, "malloc with options, but MSL Lite is enabled",
 T_DECL(malloc_data_only_options, "Malloc with options, all xzones pure data",
 		T_META_ENVVAR("MallocXzoneDataOnly=1"),
 		T_META_ENVVAR("MallocXzoneGuarded=1"),
-		T_META_TAG_XZONE_ONLY)
+		T_META_ENVVAR("MallocXzoneGuardLarge=1"),
+		T_META_ENVVAR("MallocXzoneGuardLargeQuarantine=1"),
+		T_META_TAG_XZONE_ONLY, T_META_TAG_VM_NOT_PREFERRED)
 {
 	unsigned seed = time(NULL);
 	T_LOG("seed value = %u", seed);
@@ -208,3 +228,32 @@ T_DECL(malloc_options_traced, "malloc with options, but tracing is enabled",
 	dispatch_main();
 }
 #endif // !MALLOC_TARGET_EXCLAVES
+
+T_DECL(malloc_options_alignment, "malloc with options, alignment argument",
+		T_META_TAG_XZONE_ONLY, T_META_TAG_VM_PREFERRED)
+{
+	void *ptr;
+	unsigned align = MALLOC_ZONE_MALLOC_DEFAULT_ALIGN;
+	for (unsigned size = 0; size <= 32; ++size) {
+		ptr = malloc_zone_malloc_with_options(NULL,
+				MALLOC_ZONE_MALLOC_DEFAULT_ALIGN, size,
+				MALLOC_ZONE_MALLOC_OPTION_NONE);
+		T_ASSERT_NOTNULL(ptr, "allocate default alignment %u with size %u",
+				align, size);
+		free(ptr);
+	}
+
+	align = 16;
+	for (unsigned size = 0; size <= 32; ++size) {
+		ptr = malloc_zone_malloc_with_options(NULL,
+				align, size, MALLOC_ZONE_MALLOC_OPTION_NONE);
+		if (size % align) {
+			T_ASSERT_NULL(ptr, "allocate non-default alignment %u with non-multiple size %u",
+					align, size);
+		} else {
+			T_ASSERT_NOTNULL(ptr, "allocate non-default alignment %u with multiple size %u",
+					align, size);
+		}
+		free(ptr);
+	}
+}

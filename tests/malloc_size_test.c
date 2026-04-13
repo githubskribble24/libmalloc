@@ -38,44 +38,44 @@ test_malloc_size_invalid(size_t min, size_t max, size_t incr)
 }
 
 T_DECL(malloc_size_valid, "Test malloc_size() on valid pointers, non-Nano",
-	   T_META_ENVVAR("MallocNanoZone=0"), T_META_TAG_XZONE, T_META_TAG_VM_NOT_PREFERRED)
+	   T_META_ENVVAR("MallocNanoZone=0"), T_META_TAG_ALL_ALLOCATORS,
+	   T_META_TAG_VM_PREFERRED)
 {
-	// Test various sizes, roughly targetting each allocator range.
+	// Test various sizes, roughly targeting each allocator range.
 	test_malloc_size_valid(2, 256, 16);
 	test_malloc_size_valid(512, 8192, 256);
 	test_malloc_size_valid(8192, 65536, 1024);
 }
 
 T_DECL(malloc_size_valid_nanov2, "Test malloc_size() on valid pointers for Nanov2",
-	   T_META_ENVVAR("MallocNanoZone=V2"), T_META_TAG_XZONE, T_META_TAG_VM_NOT_PREFERRED)
+	   T_META_ENVVAR("MallocNanoZone=V2"), T_META_TAG_ALL_ALLOCATORS,
+	   T_META_TAG_VM_PREFERRED)
 {
 	test_malloc_size_valid(2, 256, 16);
 }
 
 T_DECL(malloc_size_invalid, "Test malloc_size() on invalid pointers, non-Nano",
-	   T_META_ENVVAR("MallocNanoZone=0"), T_META_TAG_VM_NOT_PREFERRED)
+	   T_META_ENVVAR("MallocNanoZone=0"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_ALL_ALLOCATORS)
 {
-	// Test various sizes, roughly targetting each allocator range.
+	// Test various sizes, roughly targeting each allocator range.
 	test_malloc_size_invalid(2, 256, 16);
 	test_malloc_size_invalid(512, 8192, 256);
 	test_malloc_size_invalid(8192, 32768, 1024);
 }
 
 T_DECL(malloc_size_invalid_nanov2, "Test malloc_size() on valid pointers for Nanov2",
-	   T_META_ENVVAR("MallocNanoZone=V2"), T_META_TAG_VM_NOT_PREFERRED)
+	   T_META_ENVVAR("MallocNanoZone=V2"), T_META_TAG_VM_PREFERRED,
+	   T_META_TAG_ALL_ALLOCATORS)
 {
 	test_malloc_size_invalid(2, 256, 16);
 }
 
-// Exclaves doesn't support calling malloc_size() on freed pointers,
-// specifically tiny ones, since the pages containing the inline freelist may
-// have been depopulated
-#if !MALLOC_TARGET_EXCLAVES
 T_DECL(malloc_size_invalid_xzone,
 		"Test malloc_size() on invalid pointers for xzone",
-		T_META_TAG_XZONE_ONLY,
-	    T_META_TAG_VM_NOT_PREFERRED)
+		T_META_TAG_XZONE_ONLY, T_META_TAG_VM_PREFERRED)
 {
+	void *ptr2;
 	// Exhaust early budget
 	void *ptr = NULL;
 	for (int i = 0; i < 128; i++) {
@@ -89,6 +89,10 @@ T_DECL(malloc_size_invalid_xzone,
 	}
 
 	// malloc_size should report 0 on freed pointers
+#if !MALLOC_TARGET_EXCLAVES
+	// On exclaves, the madvise heuristic may be triggered immediately, which
+	// will zero out the page, allowing the cookie check to succeed and make it
+	// no longer appear deallocated
 	ptr = malloc(64); // TINY allocation
 	T_ASSERT_NOTNULL(ptr, "TINY allocation");
 
@@ -96,13 +100,14 @@ T_DECL(malloc_size_invalid_xzone,
 	T_EXPECT_EQ_ULONG(0UL, malloc_size(ptr), "return 0 for free TINY allocations");
 
 	ptr = malloc(4097);
-	void *ptr2 = malloc(4097);
+	ptr2 = malloc(4097);
 	T_ASSERT_NOTNULL(ptr, "SMALL allocation");
 	T_ASSERT_NOTNULL(ptr2, "SMALL allocation");
 	free(ptr2);
 	T_EXPECT_EQ_ULONG(0UL, malloc_size(ptr2), "return 0 for free SMALL allocations");
 	free(ptr);
 	T_EXPECT_EQ_ULONG(0UL, malloc_size(ptr), "return 0 for free SMALL allocations");
+#endif // !MALLOC_TARGET_EXCLAVES
 
 	ptr = malloc(65536); // LARGE allocation
 	T_ASSERT_NOTNULL(ptr, "LARGE allocation");
@@ -125,11 +130,10 @@ T_DECL(malloc_size_invalid_xzone,
 	}
 	free(ptr2);
 }
-#endif // !MALLOC_TARGET_EXCLAVES
 
 #if TARGET_OS_OSX
 T_DECL(malloc_size_large_allocation, "Test malloc_size() on buffers > 4GB",
-		T_META_TAG_XZONE, T_META_TAG_VM_NOT_PREFERRED)
+		T_META_TAG_ALL_ALLOCATORS, T_META_TAG_VM_PREFERRED)
 {
 	void *ptr = malloc(GiB(4));
 	T_ASSERT_NOTNULL(ptr, "4GB allocation");
@@ -143,9 +147,31 @@ T_DECL(malloc_size_large_allocation, "Test malloc_size() on buffers > 4GB",
 }
 #endif // TARGET_OS_OSX
 
+T_DECL(malloc_size_valid_guard_objects, "Test malloc_size() on valid pointers, non-Nano, guard objects enabled",
+		T_META_ENVVAR("MallocXzoneGuardLarge=1"),
+		T_META_ENVVAR("MallocXzoneGuardLargeQuarantine=1"),
+		T_META_TAG_XZONE_ONLY,
+		T_META_TAG_VM_NOT_PREFERRED)
+{
+	// Test various sizes, roughly targeting each allocator range.
+	test_malloc_size_valid(KiB(32), MiB(2), KiB(1));
+	test_malloc_size_valid(MiB(2), MiB(16), MiB(1));
+}
+
+T_DECL(malloc_size_invalid_guard_objects, "Test malloc_size() on invalid pointers, non-Nano, guard objects enabled",
+		T_META_ENVVAR("MallocXzoneGuardLarge=1"),
+		T_META_ENVVAR("MallocXzoneGuardLargeQuarantine=1"),
+		T_META_TAG_XZONE_ONLY,
+		T_META_TAG_VM_NOT_PREFERRED)
+{
+	// Test various sizes, roughly targeting each allocator range.
+	test_malloc_size_invalid(KiB(32), MiB(2), KiB(1));
+	test_malloc_size_invalid(MiB(2), MiB(16), MiB(1));
+}
+
 T_DECL(malloc_size_multi_segment,
 		"Make a multi-segment allocation, and pass inner pointers to malloc_size",
-		T_META_TAG_XZONE_ONLY, T_META_TAG_VM_NOT_ELIGIBLE)
+		T_META_TAG_XZONE_ONLY, T_META_TAG_VM_PREFERRED)
 {
 	void *ptr = malloc(MiB(12));
 	T_ASSERT_NOTNULL(ptr, "HUGE allocation");
@@ -161,7 +187,7 @@ T_DECL(malloc_size_multi_segment,
 #if TARGET_OS_OSX
 T_DECL(malloc_size_outside_embedded_space,
 		"Make enough allocations to push address space beyond 64GB",
-		T_META_TAG_XZONE_ONLY, T_META_TAG_VM_NOT_ELIGIBLE)
+		T_META_TAG_XZONE_ONLY, T_META_TAG_VM_PREFERRED)
 {
 	// Make 32 2GB allocations (don't fault them to avoid dirty memory) to
 	// exhaust the embedded/low segment table address space
@@ -190,7 +216,7 @@ T_DECL(malloc_size_outside_embedded_space,
 #endif // TARGET_OS_OSX
 
 T_DECL(malloc_size_max_good_size, "Check malloc_good_size(SIZE_MAX)",
-		T_META_TAG_XZONE, T_META_TAG_NANO_ON_XZONE,
+		T_META_TAG_ALL_ALLOCATORS, T_META_TAG_VM_PREFERRED,
 		T_META_ENVVAR("MallocNanoZone=1"))
 {
 	size_t request_size = SIZE_MAX - 5;
